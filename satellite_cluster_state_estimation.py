@@ -34,7 +34,7 @@ def dp(p1, p2):
 
 mu = 398600.4418
 np.random.seed(40)
-umax = 2 * 10 ** (-3)
+umax = np.inf
 rs = 0.1
 obs_nums = 4
 obs_pos = np.zeros((obs_nums, N_sample + 1, 3))
@@ -48,7 +48,7 @@ for i in range(obs_nums):
     z_range = uniform(low=-0.2, high=0.2)
     obs_pos[i] = np.column_stack((x_range * cos(t), y_range * sin(t), z_range * sin(0.5 * t)))
 obs_rad = uniform(low=0.5, high=1.0, size=obs_nums)
-# print(obs_rad)
+print(obs_rad)
 k_att, k_rep = 5e-5, 4e-4
 r_att = 5e-5 / k_att
 
@@ -60,17 +60,16 @@ def convert_np_array(obj):
         raise TypeError
 
 
-def APF_controller(si: np.ndarray, ti: np.ndarray, Di) -> np.ndarray:
+def APF_controller(si: np.ndarray, ti: np.ndarray, Di, d_flag=True) -> np.ndarray:
     kv = 0.01
     ua = k_att * APF.gradient(APF.att_field, si[:3], args=(ti, r_att))
     ur = np.zeros_like(ua)
     for y, rho in Di:
         if norm(si[:3] - y) <= rho * 4.0:
-            la_p, la_v = APF.dynamic_stretch_coefficient(si, y, rho, 5, 400)
-            # la_p, la_v = 1.0, 1.0
-            # if la_p * la_v < 1:
-            #     print(la_p, la_v)
-            # la_p, la_v = 1.0, 1.0
+            if d_flag:
+                la_p, la_v = APF.dynamic_stretch_coefficient(si, y, rho, 5, 400)
+            else:
+                la_p, la_v = 1.0, 1.0
             dr = si[:3] - y
             vr = -si[3:]
             _, td, pd = xyz2rtf(dr, [0, 0, 0])
@@ -86,7 +85,7 @@ def APF_controller(si: np.ndarray, ti: np.ndarray, Di) -> np.ndarray:
 
 def distributed_EKF_sc(sn: SensorNetwork, sc: RelativeMotionModel_J2, t_sam, tar, info=None, **kwargs):
     alpha = kwargs["a"] if "a" in kwargs else 0.05 / np.sqrt(norm(sn.MM.R))
-    beta = kwargs["b"] if "b" in kwargs else 600
+    beta = kwargs["b"] if "b" in kwargs else 10
     pd = kwargs["period"] if "period" in kwargs else None
     uFk = np.zeros((sc.fsat_num, 3))
     U_total = 0.0

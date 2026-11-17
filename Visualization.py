@@ -1,5 +1,5 @@
 import numpy as np
-from typing import List, Dict, Union, Tuple
+from typing import List, Dict, Union, Tuple, Iterable
 import matplotlib.pyplot as plt
 from matplotlib.lines import lineStyles
 from mpl_toolkits.mplot3d import Axes3D
@@ -532,7 +532,7 @@ class MultiRecorderPlot:
         rmse_pd: List[np.ndarray] = [np.sqrt((xr - xe) ** 2) for xr, xe in zip(x_rea_pd, x_nav_pd)]
         rmse_pd = np.average(rmse_pd, axis=0)
         x_rea_et = list(map(lambda ri: np.average(np.array(ri["x_real"])[:, nodes], axis=1), et_data))
-        x_nav_et = list(map(lambda ri: np.average(np.array(ri["x_nav"])[:, nodes, ], axis=1), et_data))
+        x_nav_et = list(map(lambda ri: np.average(np.array(ri["x_nav"])[:, nodes,], axis=1), et_data))
         rmse_et: List[np.ndarray] = [np.sqrt((xr - xe) ** 2) for xr, xe in zip(x_rea_et, x_nav_et)]
         rmse_et = np.average(rmse_et, axis=0)
 
@@ -709,3 +709,168 @@ class MultiRecorderPlot:
         ax.set_ylabel("Transmission rate (%)", fontsize=14)
         ax.legend(fontsize=14)
         plt.show()
+
+
+def plot_dynamic_topology_RMSE(*recorders: Iterable[dict]):
+    Ns = np.array([0, 3, 7, 8, 12, 16])
+    Nc = np.array([1, 2, 4, 5, 6, 9, 10, 11, 13, 14, 15, 17, 18, 19])
+    e2 = np.array([(np.asarray(rc["S_est"]) - np.asarray(rc["S_real"])) ** 2 for rc in recorders])
+    t_seq = np.arange(e2.shape[1]) * 10
+    lw = 1.5
+    f, axes = plt.subplots(2, 1, figsize=(6, 3.8), sharex=True)
+    for ax, components, ylabel in zip(axes, (slice(0, 3), slice(3, 6)), ("Position RMSE (m)", "Velocity RMSE (m/s)")):
+        e2_sum = np.sum(e2[:, :, :, components], axis=3)
+        RMSE_c = np.sqrt(np.mean(e2_sum[:, :, Nc], axis=(0, 2))) * 1000
+        RMSE_s = np.sqrt(np.mean(e2_sum[:, :, Ns], axis=(0, 2))) * 1000
+        ax.axvspan(3000, 24000, color="gray", alpha=0.15, zorder=0)
+        ax.text(13500, 0.94, "Dynamic Topology Duration", transform=ax.get_xaxis_transform(),
+                ha="center", va="top", fontsize=10, color="dimgray")
+        ax.axvline(3000, color="k", ls="--", lw=1.0, alpha=0.6)
+        ax.plot(t_seq, RMSE_c, color="b", lw=lw, ls="-", marker="o",
+                markersize=4, markevery=100, alpha=0.6, label="Follower Satellites")
+        ax.plot(t_seq, RMSE_s, color="darkred", lw=lw, ls="-", marker="s",
+                markersize=4, markevery=100, alpha=0.6, label="Leader Satellites")
+        ax.set_ylabel(ylabel, fontsize=12)
+        ax.set_xlim(0, t_seq[-1])
+        ax.set_ylim(bottom=0)
+        ax.tick_params(axis="both", labelsize=11)
+        select = (t_seq >= 5000) & (t_seq <= 24000)
+        axins = ax.inset_axes([0.44, 0.28, 0.53, 0.30])
+        axins.plot(t_seq[select], RMSE_c[select], color="b", lw=lw, ls="-",
+                   marker="o", markersize=4, markevery=200, alpha=0.6)
+        axins.plot(t_seq[select], RMSE_s[select], color="darkred", lw=lw, ls="-",
+                   marker="s", markersize=4, markevery=200, alpha=0.6)
+        axins.set_xlim(5000, 24000)
+        axins.set_xticks([5000, 15000, 24000])
+        axins.tick_params(axis="both", labelsize=11)
+        axins.grid(alpha=0.2)
+    axes[0].legend(fontsize=9, loc="upper right", bbox_to_anchor=(1, 0.85), ncol=2)
+    axes[1].set_xlabel("Time (s)", fontsize=12)
+    f.tight_layout(pad=0.6, h_pad=0.5)
+    plt.show()
+    return f, axes
+
+
+def plot_dropout_RMSE(recorders: Dict[str, List[dict]]):
+    scenarios = ("dropout_0", "dropout_1", "dropout_2")
+    labels = ("No dropout", "1 leader dropout", "2 leader dropouts")
+    colors = ("b", "darkred", "teal")
+    markers = ("o", "s", "d")
+    lw = 1.5
+    f, axes = plt.subplots(2, 1, figsize=(6, 3.8), sharex=True)
+    f_ss, axes_ss = plt.subplots(2, 1, figsize=(6, 3.8), sharex=True)
+    insets = [ax.inset_axes([0.44, 0.28, 0.53, 0.30]) for ax in axes]
+    dropout_time = recorders["dropout_1"][0]["dropout_time"]
+    k_dropout = int(dropout_time / 10)
+
+    for scenario, label, color, marker in zip(scenarios, labels, colors, markers):
+        rcs = recorders[scenario]
+        e2 = np.array([(np.asarray(rc["S_fused"]) - np.asarray(rc["S_real"])) ** 2 for rc in rcs])
+        C = np.array([rc["C"] for rc in rcs])
+        t_seq = np.arange(e2.shape[1]) * 10
+        select = (t_seq > 20000) & (t_seq <= 24000)
+        zoom = (t_seq >= 5000) & (t_seq <= 24000)
+        # C 是每步收到的消息条数；稳态窗口 (20000, 24000]，采样间隔 10 s。
+        rate = C[:, select].mean(axis=1) / 10
+        for ax, ax_ss, axins, components in zip(axes, axes_ss, insets, (slice(0, 3), slice(3, 6))):
+            e2_sum = np.sum(e2[:, :, components], axis=2)
+            RMSE = np.sqrt(np.mean(e2_sum, axis=0)) * 1000
+            RMSE_ss = np.sqrt(np.mean(e2_sum[:, select], axis=1)) * 1000
+            # 退出前后分别平滑，避免跨越退出时刻混合数据。
+            RMSE_plot = np.r_[MultiRecorderPlot.smooth(RMSE[:k_dropout]),
+            MultiRecorderPlot.smooth(RMSE[k_dropout:])]
+            ax.plot(t_seq, RMSE_plot, color=color, lw=lw, ls="-", marker=marker,
+                    markersize=4, markevery=100, alpha=0.6, label=label)
+            axins.plot(t_seq[zoom], RMSE_plot[zoom], color=color, lw=lw, ls="-",
+                       marker=marker, markersize=4, markevery=200, alpha=0.6)
+            ax_ss.scatter(rate, RMSE_ss, color=color, s=18, alpha=0.4)
+            ax_ss.scatter(rate.mean(), np.sqrt(np.mean(RMSE_ss ** 2)),
+                          color=color, s=75, marker="D", edgecolors="k", linewidths=0.5, label=label)
+
+    for ax, ax_ss, axins, ylabel in zip(axes, axes_ss, insets, ("Position RMSE (m)", "Velocity RMSE (m/s)")):
+        ax.axvspan(dropout_time, t_seq[-1], color="gray", alpha=0.15, zorder=0)
+        ax.axvline(dropout_time, color="k", ls="--", lw=1.0, alpha=0.6)
+        ax.text(dropout_time + 400, 0.76, "Leader dropout", transform=ax.get_xaxis_transform(),
+                ha="left", va="top", fontsize=10, color="dimgray")
+        ax.set_xlim(0, t_seq[-1])
+        ax.set_ylabel(ylabel, fontsize=12)
+        ax.set_ylim(bottom=0)
+        ax.tick_params(axis="both", labelsize=11)
+        axins.axvline(dropout_time, color="k", ls="--", lw=0.8, alpha=0.6)
+        axins.set_xlim(5000, 24000)
+        axins.set_xticks([5000, 15000, 24000])
+        axins.tick_params(axis="both", labelsize=11)
+        axins.grid(alpha=0.2)
+        ax_ss.set_ylabel(ylabel, fontsize=12)
+        ax_ss.set_ylim(bottom=0)
+        ax_ss.margins(x=0.12)
+        ax_ss.tick_params(axis="both", labelsize=11)
+        ax_ss.grid(alpha=0.2)
+    axes[0].legend(fontsize=9, loc="upper right", ncol=3)
+    axes[1].set_xlabel("Time (s)", fontsize=12)
+    axes_ss[1].legend(fontsize=9, loc="lower right", ncol=3)
+    axes_ss[1].set_xlabel("Received messages (messages/s)", fontsize=12)
+    f.tight_layout(pad=0.6, h_pad=0.5)
+    f_ss.tight_layout(pad=0.6, h_pad=0.5)
+    plt.show()
+    return (f, axes), (f_ss, axes_ss)
+
+
+def plot_fusion_ablation_RMSE(recorders: Dict[str, List[dict]], dt=10.0):
+    Nc = np.array([1, 2, 4, 5, 6, 9, 10, 11, 13, 14, 15, 17, 18, 19])
+    f, axes = plt.subplots(2, 1, figsize=(6, 3.8), sharex=True)
+    insets = [ax.inset_axes([0.44, 0.28, 0.53, 0.30]) for ax in axes]
+    labels = ("Matrix-norm weighted fusion", "Averaged weight fusion")
+    colors = ("b", "darkred")
+    markers = ("o", "s")
+    for s, label, c, m in zip(("normal", "fusion"), labels, colors, markers):
+        e2 = np.array([(np.asarray(rc["S_fused"])[:, Nc] - np.asarray(rc["S_real"])[:, Nc]) ** 2 for rc in recorders[s]])
+        t_seq = np.arange(e2.shape[1]) * dt
+        zoom = (t_seq >= 5000) & (t_seq <= 24000)
+        for ax, axins, components in zip(axes, insets, (slice(0, 3), slice(3, 6))):
+            RMSE = np.sqrt(np.mean(np.sum(e2[:, :, :, components], axis=3), axis=(0, 2))) * 1000
+            RMSE_plot = MultiRecorderPlot.smooth(RMSE)
+            ax.plot(t_seq, RMSE_plot, color=c, lw=1.5, marker=m, markersize=4, markevery=100, alpha=0.6, label=label)
+            axins.plot(t_seq[zoom], RMSE_plot[zoom], color=c, lw=1.5, marker=m,
+                       markersize=4, markevery=200, alpha=0.6)
+
+    for ax, ylabel in zip(axes, ("Position RMSE (m)", "Velocity RMSE (m/s)")):
+        ax.set_xlim(0, t_seq[-1])
+        ax.set_ylim(bottom=0)
+        ax.set_ylabel(ylabel, fontsize=12)
+        ax.tick_params(axis="both", labelsize=11)
+    for ax, axins in zip(axes, insets):
+        axins.set_xlim(5000, 24000)
+        axins.set_xticks([5000, 15000, 24000])
+        axins.tick_params(axis="both", labelsize=11)
+        axins.xaxis.label.set_size(12)
+        axins.yaxis.label.set_size(12)
+        axins.grid(alpha=0.2)
+    axes[0].legend(fontsize=11, loc="upper right")
+    axes[1].set_xlabel("Time (s)", fontsize=12)
+    insets[1].set_ylim(0.06, 0.13)
+    f.tight_layout(pad=0.6, h_pad=0.5)
+    plt.show()
+    return f, axes
+
+
+def plot_outage_RMSE(*recorders: Iterable[dict]):
+    e2 = np.array([(np.asarray(rc["S_fused"]) - np.asarray(rc["S_real"])) ** 2 for rc in recorders])
+    t_seq = np.arange(e2.shape[1]) * 10
+    starts = recorders[0]["outage_start"]
+    durations = recorders[0]["outage_duration"]
+    f, axes = plt.subplots(2, 1, figsize=(6, 3.8), sharex=True)
+    for ax, components, ylabel in zip(axes, (slice(0, 3), slice(3, 6)),
+                                      ("Position RMSE (m)", "Velocity RMSE (m/s)")):
+        RMSE = np.sqrt(np.mean(np.sum(e2[:, :, components], axis=2), axis=0)) * 1000
+        ax.plot(t_seq, RMSE, color="b", lw=1.5, ls="-", marker="o", markersize=4, markevery=100, alpha=0.6)
+        for start, duration in zip(starts, durations):
+            ax.axvspan(start, start + duration, color="red", alpha=0.15, zorder=0)
+        ax.set_xlim(0, t_seq[-1])
+        ax.set_ylim(bottom=0)
+        ax.set_ylabel(ylabel, fontsize=12)
+        ax.tick_params(axis="both", labelsize=11)
+    axes[1].set_xlabel("Time (s)", fontsize=12)
+    f.tight_layout(pad=0.6, h_pad=0.5)
+    plt.show()
+    return f, axes
